@@ -12,27 +12,24 @@ import twitter4j.Status
  */
 object Trender extends Processor {
   def main(args: Array[String]) {
+
     val myJar = this.getClass().getProtectionDomain().getCodeSource().getLocation().getPath()
     val spark_home = "../spark-0.8.0-incubating"
 
     makeAuth()
 
-    val ssc = new StreamingContext("local", "HashtagTrending", Seconds(1), spark_home, Seq(myJar))
+    val ssc = new StreamingContext("local", "HashtagTrending", Seconds(5), spark_home, Seq(myJar))
 
     val tweets = ssc.twitterStream()
 
-    val tweetMaps = tweets.map( tweet => Map("status" -> tweet.getText()) )
+    val statuses = tweets.map(tweet => {
+      Map[String, Any]("status" -> tweet.getText())
+    })
 
-    tweetMaps.foreach(rdd => rdd.foreach(statusMap => process(statusMap)))
+    val trending = configure(statuses)
 
-    /*val statuses = tweets.map(tweet => tweet.getText())
-    val hashTags: DStream[String] = statuses.flatMap(status => status.split(" ")).filter(word => word.startsWith("#"))
-
-    val counts = hashTags.map(tag => (tag, 1)).reduceByKeyAndWindow(_ + _, _ - _, Seconds (60 * 5), Seconds(1))
-
-    val sortedCounts = counts.map( (t: (String, Int)) => (t._2, t._1) ).transform(rdd => rdd.sortByKey(false))
-
-    sortedCounts.foreach(rdd =>println("\nTop 10 hashtags:\n" + rdd.take(10).mkString("\n")))*/
+    trending.saveAsTextFiles("top_count")
+    trending.foreach(rdd =>println("\nTop 10 hashtags:\n" + rdd.take(10).mkString("\n")))
 
     ssc.checkpoint("./checkpoint")
     ssc.start()
@@ -48,8 +45,52 @@ object Trender extends Processor {
   }
 
   def process(input: Map[String, Any]): Map[String, Any] = {
-    println("statusMap: " + input)
+    input.get("status").get.toString().split(" ").filter(word => word.startsWith("#")).foreach(tag => println(tag))
 
     input
   }
+
+  def configure(stream: DStream[Map[String, Any]]): DStream[Map[String, Any]] =
+    stream.map(map => {
+      // make sure the Strings are not empty
+
+      map.get("status") match {
+        case null => ""
+        case n => n.toString()
+      }
+    }).flatMap(status => {
+      // Generate words
+
+      status.split(" ")
+    }).filter(word => {
+      // get those words starting with #
+
+      word.startsWith("#")
+    }).map(tag => {
+      // Convert works into tuples
+
+      (tag, 1)
+    }).reduceByKeyAndWindow(_ + _, _ - _, Seconds (60 * 5), Seconds(5)
+     ).map( (t: (String, Int)) => {
+      // flip the tuple to have the count as the first term
+
+      (t._2, t._1)
+    }).transform(rdd => {
+      if(rdd.count() > 0) {
+        val average = rdd.map( (p:(Int, String)) => {
+          p._1
+        }).reduce(_ + _).toDouble / rdd.count().toDouble
+
+        rdd.filter( (p:(Int, String)) => {
+          p._1 >= average
+        }).map( (p: (Int, String)) => {
+          Map(p._2 -> p._1)
+        })
+      } else {
+        rdd.map( (p: (Int, String)) => {
+          Map(p._2 -> p._1)
+        })
+      }
+    })
+
 }
