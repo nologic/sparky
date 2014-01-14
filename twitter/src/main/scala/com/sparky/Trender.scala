@@ -77,16 +77,22 @@ object Trender extends Processor {
       (t._2, t._1)
     }).transform(rdd => {
       if(rdd.count() > 0) {
+        // pick out only the counts above average
+
+        // compute average
         val average = rdd.map( (p:(Int, String)) => {
           p._1
         }).reduce(_ + _).toDouble / rdd.count().toDouble
 
+        // filter out only those above average
         rdd.filter( (p:(Int, String)) => {
           p._1 >= average
         }).map( (p: (Int, String)) => {
           Map(p._2 -> p._1)
         })
       } else {
+
+        // Just in clase the RDD is empty, we need this
         rdd.map( (p: (Int, String)) => {
           Map(p._2 -> p._1)
         })
